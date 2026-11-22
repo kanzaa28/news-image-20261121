@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const PAGE_NAME = 'entry.png';
 const MAX_PAGE_BYTES = 1024 * 1024; // the gate's 1 MiB ceiling
+const MAX_PAGE_EDGE = 1024; // the gate's pixel ceiling per side
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
 
@@ -26,15 +27,25 @@ function hasSignature(bytes, signature) {
 }
 
 // Read the stored page and refuse to publish anything the gate would reject
-// out of hand: an empty or oversized file, or bytes that are not the PNG or
-// JPEG the file's first bytes claim to be.
+// out of hand: an empty or oversized file, bytes that are not the PNG or JPEG
+// the file's first bytes claim to be, or a PNG whose header promises a canvas
+// larger than the gate's 1024 by 1024 pixels.
 function loadPage() {
   const here = dirname(fileURLToPath(import.meta.url));
   const bytes = readFileSync(join(here, PAGE_NAME));
   if (bytes.length === 0 || bytes.length > MAX_PAGE_BYTES) {
     throw new Error(`${PAGE_NAME} is ${bytes.length} bytes; the gate allows 1..${MAX_PAGE_BYTES}`);
   }
-  if (!hasSignature(bytes, PNG_SIGNATURE) && !hasSignature(bytes, JPEG_SIGNATURE)) {
+  if (hasSignature(bytes, PNG_SIGNATURE)) {
+    // A PNG's first chunk is always IHDR: its width and height sit at fixed
+    // offsets 16 and 20, big-endian, right after the signature and the
+    // chunk's length and type fields.
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    if (width === 0 || height === 0 || width > MAX_PAGE_EDGE || height > MAX_PAGE_EDGE) {
+      throw new Error(`${PAGE_NAME} is ${width}x${height}; the gate allows at most ${MAX_PAGE_EDGE}x${MAX_PAGE_EDGE}`);
+    }
+  } else if (!hasSignature(bytes, JPEG_SIGNATURE)) {
     throw new Error(`${PAGE_NAME} is neither a PNG nor a JPEG image`);
   }
   return bytes;
